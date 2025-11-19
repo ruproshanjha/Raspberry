@@ -1,65 +1,98 @@
+# indices.py
+# All vegetation indices for multispectral Raspberry Pi project
+# Fully NumPy + OpenCV compatible. No SciPy, no PyWavelets.
+
 import cv2
-from dsp_nir import estimate_nir
-from indices import ndvi, vari, exg, weed, crop_health
-from grid_display import make_grid
+import numpy as np
 
-def main():
-    print("Starting...")
 
-    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-    print("Camera opened:", cap.isOpened())
+# ------------------------- Utility -------------------------
 
-    while True:
-        ret, frame = cap.read()
-        print("frame read:", ret)
-        if not ret:
-            break
+def norm8(x):
+    """Normalize any float image to uint8 (0–255)."""
+    x = x.astype(np.float32)
+    x = cv2.normalize(x, None, 0, 255, cv2.NORM_MINMAX)
+    return x.astype(np.uint8)
 
-        print("frame shape:", frame.shape)
 
-        # ----- NIR -----
-        nir, parts = estimate_nir(frame)
-        print("nir:", nir.shape)
+# ------------------------- NDVI -------------------------
 
-        # ----- vegetation indices -----
-        ndvi_map = ndvi(nir, frame)
-        print("ndvi:", ndvi_map.shape)
+def ndvi(nir, frame):
+    b, g, r = cv2.split(frame)
+    r = r.astype(np.float32)
+    nir = nir.astype(np.float32)
 
-        vari_map = vari(frame)
-        print("vari:", vari_map.shape)
+    # Avoid division warnings
+    bottom = (nir + r) + 1e-6
 
-        exg_map = exg(frame)
-        print("exg:", exg_map.shape)
+    ndvi_map = (nir - r) / bottom      # -1 to +1
+    ndvi_map = (ndvi_map + 1) / 2.0    # 0 to 1
+    ndvi_map = (ndvi_map * 255).astype(np.uint8)
 
-        weed_map = weed(exg_map)
-        print("weed:", weed_map.shape)
+    return ndvi_map
 
-        crop_map = crop_health(ndvi_map)
-        print("crop:", crop_map.shape)
 
-        b, g, r = cv2.split(frame)
+# ------------------------- VARI -------------------------
 
-        # ----- GRID ------
-        try:
-            grid = make_grid(
-                frame,
-                r, g, b,
-                nir,
-                ndvi_map,
-                crop_map,
-                weed_map,
-                vari_map,
-                out_w=480,
-                out_h=320
-            )
-            print("grid:", grid.shape)
-        except Exception as e:
-            print("GRID ERROR:", e)
-            break
+def vari(frame):
+    b, g, r = cv2.split(frame)
+    b = b.astype(np.float32)
+    g = g.astype(np.float32)
+    r = r.astype(np.float32)
 
-        cv2.imshow("GRID", grid)
+    vari_map = (g - r) / (g + r - b + 1e-6)
+    vari_map = (vari_map + 1) / 2.0
+    vari_map = (vari_map * 255).astype(np.uint8)
+    return vari_map
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
 
-main()
+# ------------------------- EXG (Excess Green) -------------------------
+
+def exg(frame):
+    b, g, r = cv2.split(frame)
+    b = b.astype(np.float32)
+    g = g.astype(np.float32)
+    r = r.astype(np.float32)
+
+    exg_map = 2 * g - r - b
+    return norm8(exg_map)
+
+
+# ------------------------- WEED DETECTION -------------------------
+# Simple method: weeds often have high EXG (very green), 
+# and low NDVI (non-crop type vegetation).
+# This is just a placeholder until your dataset calibration.
+
+def weed(exg_map):
+    exg_map = exg_map.astype(np.uint8)
+
+    # High green means weeds or grass
+    _, binary = cv2.threshold(exg_map, 150, 255, cv2.THRESH_BINARY)
+
+    # Clean mask
+    binary = cv2.medianBlur(binary, 5)
+
+    return binary
+
+
+# ------------------------- CROP HEALTH -------------------------
+
+def crop_health(ndvi_map):
+    ndvi_map = ndvi_map.astype(np.uint8)
+
+    # Healthy crops = high NDVI
+    healthy_mask = cv2.inRange(ndvi_map, 150, 255)
+
+    # Unhealthy = low NDVI
+    unhealthy_mask = cv2.inRange(ndvi_map, 0, 120)
+
+    # Create color mask
+    crop = np.zeros((ndvi_map.shape[0], ndvi_map.shape[1], 3), dtype=np.uint8)
+
+    # Red = unhealthy
+    crop[unhealthy_mask > 0] = (0, 0, 255)
+
+    # Green = healthy
+    crop[healthy_mask > 0] = (0, 255, 0)
+
+    return crop
