@@ -1,61 +1,48 @@
-# grid_display.py
+# main.py
 import cv2
-import numpy as np
+from dsp_nir import estimate_nir
+from indices import ndvi, vari, exg, weed, crop_health
+from grid_display import make_grid
 
-# Normalize any float image to 8-bit
-def norm8(x):
-    x = x.astype(np.float32)
-    x = cv2.normalize(x, None, 0, 255, cv2.NORM_MINMAX)
-    return x.astype(np.uint8)
+def main():
+    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+    cap.set(3, 640)
+    cap.set(4, 480)
 
-# Convert grayscale → BGR for stacking
-def to_bgr(x):
-    if len(x.shape) == 2:
-        return cv2.cvtColor(x, cv2.COLOR_GRAY2BGR)
-    return x
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
 
-def make_grid(input_frame, R, G, B, NIR, NDVI, CROP, WEED, VARI, out_w=480, out_h=320):
-    # Normalize all channels
-    R = norm8(R)
-    G = norm8(G)
-    B = norm8(B)
-    NIR = norm8(NIR)
-    NDVI = norm8(NDVI)
-    CROP = norm8(CROP)
-    WEED = norm8(WEED)
-    VARI = norm8(VARI)
+        # Estimate NIR
+        nir, parts = estimate_nir(frame)
 
-    # Colormaps for NDVI and VARI
-    NDVI = cv2.applyColorMap(NDVI, cv2.COLORMAP_JET)
-    VARI = cv2.applyColorMap(VARI, cv2.COLORMAP_JET)
+        # Vegetation indices
+        ndvi_map = ndvi(nir, frame)
+        vari_map = vari(frame)
+        exg_map  = exg(frame)
+        weed_map = weed(exg_map)
+        crop_map = crop_health(ndvi_map)
 
-    # Convert base channels to BGR
-    R = to_bgr(R)
-    G = to_bgr(G)
-    B = to_bgr(B)
-    NIR = to_bgr(NIR)
-    CROP = to_bgr(CROP)
-    WEED = to_bgr(WEED)
+        # Channels
+        b, g, r = cv2.split(frame)
 
-    # Resize everything to equal tile size
-    # 3 columns, 3 rows → 9 tiles
-    TW = out_w // 3
-    TH = out_h // 3
+        # Build exact 480×320 grid
+        grid = make_grid(
+            frame,
+            r, g, b,
+            nir,
+            ndvi_map,
+            crop_map,
+            weed_map,
+            vari_map,
+            out_w=480,
+            out_h=320
+        )
 
-    def resize_tile(t):
-        return cv2.resize(t, (TW, TH))
+        cv2.imshow("MULTISPECTRAL GRID", grid)
 
-    tiles = [
-        [resize_tile(input_frame), resize_tile(R), resize_tile(G)],
-        [resize_tile(B), resize_tile(NIR), resize_tile(NDVI)],
-        [resize_tile(CROP), resize_tile(WEED), resize_tile(VARI)]
-    ]
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-    # Build grid
-    row1 = np.hstack(tiles[0])
-    row2 = np.hstack(tiles[1])
-    row3 = np.hstack(tiles[2])
-
-    final = np.vstack([row1, row2, row3])
-
-    return final
+main()
