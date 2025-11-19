@@ -1,41 +1,48 @@
-import cv2
+# fb_display.py
+# Correct framebuffer writer with RGB565 conversion
+
+import fcntl
+import struct
 import numpy as np
 
-def norm8(x):
-    x = x.astype(np.float32)
-    x = cv2.normalize(x, None, 0, 255, cv2.NORM_MINMAX)
-    return x.astype(np.uint8)
 
-def to_bgr(x):
-    if len(x.shape) == 2:
-        return cv2.cvtColor(x, cv2.COLOR_GRAY2BGR)
-    return x
+# ioctl codes for framebuffer
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
 
-def make_grid(inp, R, G, B, NIR, NDVI, CROP, WEED, VARI, out_w=480, out_h=320):
 
-    # Normalize everything
-    R = to_bgr(norm8(R))
-    G = to_bgr(norm8(G))
-    B = to_bgr(norm8(B))
-    NIR = to_bgr(norm8(NIR))
-    CROP = to_bgr(norm8(CROP))
-    WEED = to_bgr(norm8(WEED))
-    NDVI = cv2.applyColorMap(norm8(NDVI), cv2.COLORMAP_JET)
-    VARI = cv2.applyColorMap(norm8(VARI), cv2.COLORMAP_JET)
-    inp = cv2.resize(inp, (out_w//3, out_h//3))
+def bgr2rgb565(img):
+    """Convert 480x320 BGR888 → RGB565."""
+    b = img[:,:,0].astype(np.uint16)
+    g = img[:,:,1].astype(np.uint16)
+    r = img[:,:,2].astype(np.uint16)
 
-    # Resize tiles
-    TW = out_w // 3
-    TH = out_h // 3
+    rgb565 = ((r & 0xF8) << 8) | \
+             ((g & 0xFC) << 3) | \
+             (b >> 3)
 
-    def RZ(x): return cv2.resize(x, (TW, TH))
+    return rgb565.astype(np.uint16)
 
-    row1 = np.hstack([inp, RZ(R), RZ(G)])
-    row2 = np.hstack([RZ(B), RZ(NIR), RZ(NDVI)])
-    row3 = np.hstack([RZ(CROP), RZ(WEED), RZ(VARI)])
 
-    final = np.vstack([row1, row2, row3])
+def fb_show(img, fb="/dev/fb0"):
+    # Open framebuffer
+    f = open(fb, "wb")
 
-    # Final enforcement (very important)
-    final = cv2.resize(final, (out_w, out_h))
-    return final
+    # Get screen info
+    vinfo = fcntl.ioctl(f, FBIOGET_VSCREENINFO, bytes(160))
+    xres, yres, bpp = struct.unpack_from("I I I", vinfo, 0)
+
+    # Verify resolution
+    if img.shape[1] != xres or img.shape[0] != yres:
+        raise ValueError(f"Image must be {xres}x{yres}, got {img.shape[1]}x{img.shape[0]}")
+
+    # Convert to correct bit depth
+    if bpp == 16:
+        buf = bgr2rgb565(img).tobytes()
+    elif bpp == 24:
+        buf = img[:, :, ::-1].tobytes()  # BGR → RGB888
+    else:
+        raise ValueError(f"Unsupported framebuffer depth: {bpp}")
+
+    f.write(buf)
+    f.close()
