@@ -1,30 +1,19 @@
-import cv2
-import asyncio
-import websockets
-import numpy as np
+<!DOCTYPE html>
+<html>
+<body>
+<h3>Live Stream</h3>
+<img id="video" width="640">
 
-async def stream(websocket):
-    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-    cap.set(3, 640)
-    cap.set(4, 480)
+<script>
+let socket = new WebSocket("ws://" + location.hostname + ":8765");
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            continue
-        
-        # Encode frame as JPEG
-        _, jpg = cv2.imencode('.jpg', frame)
-        data = jpg.tobytes()
+socket.binaryType = "arraybuffer";
 
-        # Send binary data
-        await websocket.send(data)
-
-        await asyncio.sleep(0.03)  # ~30 FPS
-
-async def main():
-    async with websockets.serve(stream, "0.0.0.0", 8765, max_size=None):
-        print("WebSocket Server running at ws://0.0.0.0:8765")
-        await asyncio.Future()
-
-asyncio.run(main())
+socket.onmessage = function(event) {
+    let bytes = new Uint8Array(event.data);
+    let blob = new Blob([bytes], {type: 'image/jpeg'});
+    document.getElementById("video").src = URL.createObjectURL(blob);
+};
+</script>
+</body>
+</html>
